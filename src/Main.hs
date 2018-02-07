@@ -45,8 +45,10 @@ instance Database ShoppingCartDb
 shoppingCartDb :: DatabaseSettings be ShoppingCartDb
 shoppingCartDb = defaultDbSettings
 
-insertUsers :: Connection -> IO ()
-insertUsers conn = do
+type DBIO a = ReaderT Connection IO a
+
+insertUsers :: DBIO ()
+insertUsers = ReaderT $ \conn -> do
   withDatabase conn $ runInsert $
     insert (_shoppingCartUsers shoppingCartDb) $
       insertValues
@@ -77,27 +79,27 @@ insertUsers conn = do
           "b4cc344d25a2efe540adbf2678e2304c"
         ]
 
-type DB a = ReaderT Connection IO a
-
-numUsersByName :: Connection -> IO [(Text, Int)]
-numUsersByName conn =
-  withDatabase conn $ runSelectReturningList $ select query
+numUsersByName :: DBIO [(Text, Int)]
+numUsersByName = ask >>= \conn ->
+  liftIO $ withDatabase conn $ runSelectReturningList $ select query
   where
     query =
       aggregate_ (\u -> (group_ (_userFirstName u), countAll_)) $
         all_ (_shoppingCartUsers shoppingCartDb)
 
-numUsers :: Connection -> IO (Maybe Int)
-numUsers conn =
+numUsers :: DBIO (Maybe Int)
+numUsers = ReaderT $ \conn ->
   withDatabase conn $ runSelectReturningOne $ select $
     aggregate_ (\_ -> countAll_) (all_ (_shoppingCartUsers shoppingCartDb))
 
-main :: IO ()
-main = do
-  conn <- open "shoppingcart1.db"
-  count <- numUsers conn
+runSql :: DBIO ()
+runSql = do
+  count <- numUsers
   case count of
-    Just 0 -> insertUsers conn
+    Just 0 -> insertUsers
     _ -> pure ()
-  byName <- numUsersByName conn
+  byName <- numUsersByName
   mapM_ (liftIO . putStrLn . show) byName
+
+main :: IO ()
+main = open "shoppingcart1.db" >>= runReaderT runSql
