@@ -2,13 +2,16 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ConstraintKinds #-}
 
 module Main where
 
 import Control.Monad.Reader
+import Control.Monad.IO.Class
 
 import Database.Beam
 import Database.Beam.Sqlite
@@ -45,11 +48,18 @@ instance Database ShoppingCartDb
 shoppingCartDb :: DatabaseSettings be ShoppingCartDb
 shoppingCartDb = defaultDbSettings
 
-type DBIO a = ReaderT Connection IO a
 
-insertUsers :: DBIO ()
-insertUsers = ReaderT $ \conn -> do
-  withDatabase conn $ runInsert $
+type DBIO m = (MonadReader Connection m, MonadIO m)
+
+withConn
+  :: (DBIO m1, MonadBeam syntax be Connection m2)
+  => m2 b -> m1 b
+withConn f = do
+  conn <- ask
+  liftIO $ withDatabase conn f
+
+insertUsers :: DBIO m => m ()
+insertUsers = withConn . runInsert $
     insert (_shoppingCartUsers shoppingCartDb) $
       insertValues
         [ User
@@ -79,20 +89,17 @@ insertUsers = ReaderT $ \conn -> do
           "b4cc344d25a2efe540adbf2678e2304c"
         ]
 
-numUsersByName :: DBIO [(Text, Int)]
-numUsersByName = ask >>= \conn ->
-  liftIO $ withDatabase conn $ runSelectReturningList $ select query
-  where
-    query =
-      aggregate_ (\u -> (group_ (_userFirstName u), countAll_)) $
-        all_ (_shoppingCartUsers shoppingCartDb)
+numUsersByName :: DBIO m => m [(Text, Int)]
+numUsersByName = withConn . runSelectReturningList . select $
+  aggregate_ (\u -> (group_ (_userFirstName u), countAll_)) $
+    all_ (_shoppingCartUsers shoppingCartDb)
 
-numUsers :: DBIO (Maybe Int)
-numUsers = ReaderT $ \conn ->
-  withDatabase conn $ runSelectReturningOne $ select $
-    aggregate_ (\_ -> countAll_) (all_ (_shoppingCartUsers shoppingCartDb))
+numUsers :: DBIO m => m (Maybe Int)
+numUsers = withConn . runSelectReturningOne . select $
+  aggregate_ (\_ -> countAll_)
+             (all_ (_shoppingCartUsers shoppingCartDb))
 
-runSql :: DBIO ()
+runSql :: DBIO m => m ()
 runSql = do
   count <- numUsers
   case count of
